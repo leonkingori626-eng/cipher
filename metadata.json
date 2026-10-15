@@ -1,0 +1,6 @@
+{
+  "name": "CIPHER - Human-Centred AI Business Ecosystem",
+  "description": "CIPHER Desk: Help businesses answer routine questions, organize enquiries, and bring in a person when conversations need a human touch.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
