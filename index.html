@@ -15,6 +15,37 @@
   </head>
   <body class="bg-[#F7F9F6] text-[#27332B] font-['Inter',sans-serif] antialiased selection:bg-[#497A58] selection:text-white">
     <div id="root"></div>
+    <script>
+      // Suppress Vite HMR WebSocket connection errors in preview environment
+      window.addEventListener('unhandledrejection', function(event) {
+        if (event.reason && event.reason.message && (event.reason.message.includes('WebSocket') || event.reason.message.includes('closed without opened'))) {
+          event.preventDefault();
+        }
+      });
+      const OrigWebSocket = window.WebSocket;
+      if (OrigWebSocket) {
+        window.WebSocket = function(url, protocols) {
+          try {
+            return new OrigWebSocket(url, protocols);
+          } catch (e) {
+            const mockWs = {
+              send() {},
+              close() {},
+              addEventListener() {},
+              removeEventListener() {},
+              readyState: 3,
+              CLOSED: 3
+            };
+            return mockWs;
+          }
+        };
+        window.WebSocket.prototype = OrigWebSocket.prototype;
+        window.WebSocket.CONNECTING = OrigWebSocket.CONNECTING;
+        window.WebSocket.OPEN = OrigWebSocket.OPEN;
+        window.WebSocket.CLOSING = OrigWebSocket.CLOSING;
+        window.WebSocket.CLOSED = OrigWebSocket.CLOSED;
+      }
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

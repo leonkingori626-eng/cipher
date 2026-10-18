@@ -124,8 +124,10 @@ async function runTests() {
     console.log('\n--- Test 6: Failed-Write Error Propagation ---');
     let writeFailed = false;
     try {
-      // Attempt to write to an illegal path (directory as file)
-      saveDatabase(initialDb, '/proc/nonexistent/directory/invalid_db.json');
+      // Attempt to write using an existing file as a parent directory (guaranteed failure)
+      const blockerFile = path.join(testDir, 'blocker.txt');
+      fs.writeFileSync(blockerFile, 'i am a file');
+      saveDatabase(initialDb, path.join(blockerFile, 'invalid_db.json'));
     } catch (err: any) {
       writeFailed = true;
       assert(err.message.includes('Failed to persist database'), 'Error propagated to caller on failed disk write');

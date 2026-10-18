@@ -28,6 +28,7 @@ import { BusinessRegistrationWizard } from './components/dashboard/BusinessRegis
 import { PublicBusinessSite } from './components/public/PublicBusinessSite';
 import { CustomerChatWidget } from './components/CustomerChatWidget';
 import { AuthModal } from './components/auth/AuthModal';
+import { CipherWatermarkBackground } from './components/dashboard/CipherWatermarkBackground';
 
 import {
   initialBusinessProfile,
@@ -506,12 +507,14 @@ export default function App() {
               unreadCount={unreadHandoffCount}
               onLaunchNewWorkspace={() => setAppMode('wizard')}
             />
-            <main className="flex-1 overflow-y-auto bg-[#F7F9F6]">
-              {/* If Client role is active and user is on overview or crm, render ClientPortalTab for them */}
-              {currentRole === 'Client' && (activeTab === 'overview' || activeTab === 'crm' || activeTab === 'projects') ? (
-                <ClientPortalTab projects={projects} proposals={proposals} />
-              ) : (
-                <>
+            <main className="flex-1 overflow-y-auto bg-[#F7F9F6] relative">
+              <CipherWatermarkBackground />
+              <div className="relative z-10 flex flex-col min-h-full">
+                {/* If Client role is active and user is on overview or crm, render ClientPortalTab for them */}
+                {currentRole === 'Client' && (activeTab === 'overview' || activeTab === 'crm' || activeTab === 'projects') ? (
+                  <ClientPortalTab projects={projects} proposals={proposals} />
+                ) : (
+                  <>
                   {activeTab === 'overview' && (
                     <OverviewTab
                       conversations={conversations}
@@ -613,6 +616,7 @@ export default function App() {
                   )}
                 </>
               )}
+              </div>
             </main>
           </div>
         </div>

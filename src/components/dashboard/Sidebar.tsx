@@ -62,14 +62,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside className="w-68 bg-[#26372D] text-white flex flex-col h-screen shrink-0 border-r border-[#1a261f]">
       {/* Brand Header */}
-      <div className="p-6 border-b border-[#354b3d] flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-[#497A58] flex items-center justify-center text-white font-bold">
-            <Shield className="w-5 h-5 text-emerald-100" />
+      <div className="p-5 border-b border-[#354b3d] flex items-center justify-between bg-gradient-to-r from-[#213027] to-[#26372D]">
+        <div className="flex items-center gap-3.5">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#5a8b67] to-[#396348] flex items-center justify-center text-white shadow-inner border border-emerald-500/30 relative">
+            <svg className="w-5 h-5 text-emerald-100" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 2l7 4v5c0 5.25-3.5 10.15-7 11.25C8.5 21.15 5 16.25 5 11V6l7-4z" />
+              <circle cx="12" cy="7" r="1.5" fill="currentColor" />
+              <circle cx="8.5" cy="13" r="1.5" fill="currentColor" />
+              <circle cx="15.5" cy="13" r="1.5" fill="currentColor" />
+              <circle cx="12" cy="17.5" r="1.5" fill="currentColor" />
+              <line x1="12" y1="8.5" x2="8.5" y2="11.5" stroke="currentColor" strokeWidth="1.5" />
+              <line x1="12" y1="8.5" x2="15.5" y2="11.5" stroke="currentColor" strokeWidth="1.5" />
+              <line x1="8.5" y1="14.5" x2="12" y2="16" stroke="currentColor" strokeWidth="1.5" />
+              <line x1="15.5" y1="14.5" x2="12" y2="16" stroke="currentColor" strokeWidth="1.5" />
+            </svg>
           </div>
           <div>
-            <h1 className="font-bold text-base tracking-tight">CIPHER Command</h1>
-            <span className="block text-[10px] text-emerald-300 font-medium">Multi-Business Ecosystem</span>
+            <h1 className="font-extrabold text-base tracking-widest text-emerald-50 font-serif">CIPHER</h1>
+            <span className="block text-[9px] uppercase tracking-wider text-emerald-300 font-medium">Multi-Business Ecosystem</span>
           </div>
         </div>
       </div>

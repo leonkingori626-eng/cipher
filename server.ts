@@ -1675,4 +1675,20 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 });
 
 const PORT = Number(process.env.PORT) || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`CIPHER Multi-Tenant Ecosystem running on port ${PORT} with durable persistence`));
+const server = app.listen(PORT, '0.0.0.0', () => console.log(`CIPHER Multi-Tenant Ecosystem running on port ${PORT} with durable persistence`));
+
+// Graceful Shutdown Handler
+function handleGracefulShutdown(signal: string) {
+  console.info(`[SHUTDOWN] Received ${signal}. Starting graceful shutdown...`);
+  server.close(() => {
+    console.info('[SHUTDOWN] HTTP server closed successfully.');
+    process.exit(0);
+  });
+  setTimeout(() => {
+    console.error('[SHUTDOWN] Force closing remaining connections after timeout.');
+    process.exit(1);
+  }, 10000);
+}
+
+process.on('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => handleGracefulShutdown('SIGINT'));
