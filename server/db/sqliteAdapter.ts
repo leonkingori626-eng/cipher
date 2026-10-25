@@ -12,16 +12,67 @@ export class CipherSqliteAdapter {
   private dbFilePath: string;
 
   constructor(customPath?: string) {
-    this.dbFilePath = customPath || path.join(__dirname, '../../cipher.sqlite');
+    if (customPath) {
+      this.dbFilePath = path.resolve(customPath);
+    } else if (process.env.CIPHER_SQLITE_PATH) {
+      this.dbFilePath = path.resolve(process.env.CIPHER_SQLITE_PATH);
+    } else if (process.env.CIPHER_DB_PATH && (process.env.CIPHER_DB_PATH.endsWith('.sqlite') || process.env.CIPHER_DB_PATH.endsWith('.db'))) {
+      this.dbFilePath = path.resolve(process.env.CIPHER_DB_PATH);
+    } else {
+      this.dbFilePath = path.join(__dirname, '../../cipher.sqlite');
+    }
+    if (this.dbFilePath.endsWith('.json')) {
+      this.dbFilePath = `${this.dbFilePath}.sqlite`;
+    }
+  }
+
+  public getDatabaseFilePath(): string {
+    return this.dbFilePath;
+  }
+
+  public hasCommittedData(): boolean {
+    if (!this.db) return false;
+    try {
+      const stmt = this.db.prepare('SELECT COUNT(*) as count FROM workspaces;');
+      let count = 0;
+      if (stmt.step()) {
+        count = (stmt.getAsObject() as any).count || 0;
+      }
+      stmt.free();
+      return count > 0;
+    } catch {
+      return false;
+    }
   }
 
   async init(): Promise<void> {
     if (this.db) return;
     const SQL = await initSqlJs();
+
+    const parentDir = path.dirname(this.dbFilePath);
+    if (!fs.existsSync(parentDir)) {
+      try {
+        fs.mkdirSync(parentDir, { recursive: true });
+      } catch (err: any) {
+        throw new Error(`CRITICAL: Cannot create database directory at ${parentDir}: ${err.message}`);
+      }
+    }
     
     if (fs.existsSync(this.dbFilePath)) {
-      const fileBuffer = fs.readFileSync(this.dbFilePath);
-      this.db = new SQL.Database(fileBuffer);
+      const stats = fs.statSync(this.dbFilePath);
+      if (stats.size > 0) {
+        try {
+          const fileBuffer = fs.readFileSync(this.dbFilePath);
+          this.db = new SQL.Database(fileBuffer);
+          this.createSchema();
+        } catch (dbErr: any) {
+          throw new Error(`CRITICAL: Corrupted SQLite database at ${this.dbFilePath}: ${dbErr.message}`);
+        }
+      } else {
+        this.db = new SQL.Database();
+        this.createSchema();
+        this.seedFromDefaultJson();
+      }
     } else {
       this.db = new SQL.Database();
       this.createSchema();
@@ -209,9 +260,112 @@ export class CipherSqliteAdapter {
     if (!this.db) return;
     const data = this.db.export();
     const buffer = Buffer.from(data);
+    const dir = path.dirname(this.dbFilePath);
+    if (!fs.existsSync(dir)) {
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+      } catch (mkdirErr: any) {
+        throw new Error(`CRITICAL: Failed to create database directory ${dir}: ${mkdirErr.message}`);
+      }
+    }
     const tempPath = `${this.dbFilePath}.${Date.now()}.tmp`;
+    try {
+      fs.writeFileSync(tempPath, buffer);
+      fs.renameSync(tempPath, this.dbFilePath);
+    } catch (writeErr: any) {
+      if (fs.existsSync(tempPath)) {
+        try { fs.unlinkSync(tempPath); } catch (_) {}
+      }
+      throw new Error(`CRITICAL: Failed to write SQLite database to ${this.dbFilePath}: ${writeErr.message}`);
+    }
+  }
+
+  public createBackup(customBackupDir?: string): {
+    filename: string;
+    backupPath: string;
+    timestamp: string;
+    sizeBytes: number;
+    workspacesCount: number;
+  } {
+    if (!this.db) throw new Error('SQLite database not initialized');
+    const backupDir = customBackupDir || process.env.CIPHER_BACKUP_PATH || path.join(path.dirname(this.dbFilePath), 'backups');
+    if (!fs.existsSync(backupDir)) {
+      fs.mkdirSync(backupDir, { recursive: true });
+    }
+    const timestampIso = new Date().toISOString();
+    const safeTimestamp = timestampIso.replace(/[:.]/g, '-');
+    const filename = `cipher-sqlite-backup-${safeTimestamp}.sqlite`;
+    const backupPath = path.join(backupDir, filename);
+
+    const data = this.db.export();
+    const buffer = Buffer.from(data);
+    const tempPath = `${backupPath}.${Date.now()}.tmp`;
     fs.writeFileSync(tempPath, buffer);
-    fs.renameSync(tempPath, this.dbFilePath);
+    fs.renameSync(tempPath, backupPath);
+
+    const stats = fs.statSync(backupPath);
+    let workspacesCount = 0;
+    try {
+      const stmt = this.db.prepare('SELECT COUNT(*) as count FROM workspaces;');
+      if (stmt.step()) workspacesCount = (stmt.getAsObject() as any).count || 0;
+      stmt.free();
+    } catch (_) {}
+
+    return {
+      filename,
+      backupPath,
+      timestamp: timestampIso,
+      sizeBytes: stats.size,
+      workspacesCount
+    };
+  }
+
+  public restoreFromBackup(backupFilePath: string, options?: { force?: boolean }): {
+    success: boolean;
+    restoredFrom: string;
+    safetyQuarantinePath: string;
+    workspacesCount: number;
+  } {
+    const resolvedPath = path.resolve(backupFilePath);
+    if (!fs.existsSync(resolvedPath)) {
+      throw new Error(`Backup file does not exist at ${resolvedPath}`);
+    }
+    const backupStats = fs.statSync(resolvedPath);
+    if (backupStats.size === 0) {
+      throw new Error(`Corrupt backup file: file is empty at ${resolvedPath}`);
+    }
+
+    if (fs.existsSync(this.dbFilePath)) {
+      const liveStats = fs.statSync(this.dbFilePath);
+      if (liveStats.mtimeMs > backupStats.mtimeMs && !options?.force) {
+        throw new Error(
+          `Restore blocked: Live database was modified more recently (${liveStats.mtime.toISOString()}) than the backup (${backupStats.mtime.toISOString()}). Specify force: true to proceed.`
+        );
+      }
+    }
+
+    // Safety quarantine of current database
+    let safetyQuarantinePath = '';
+    if (fs.existsSync(this.dbFilePath)) {
+      safetyQuarantinePath = `${this.dbFilePath}.pre-restore.${Date.now()}.bak`;
+      fs.copyFileSync(this.dbFilePath, safetyQuarantinePath);
+    }
+
+    // Atomic restore
+    const fileBuffer = fs.readFileSync(resolvedPath);
+    const tempLive = `${this.dbFilePath}.${Date.now()}.tmp`;
+    fs.writeFileSync(tempLive, fileBuffer);
+    fs.renameSync(tempLive, this.dbFilePath);
+
+    // Reset cached DB connection so next query reloads the restored database file
+    this.db = null;
+
+    return {
+      success: true,
+      restoredFrom: resolvedPath,
+      safetyQuarantinePath,
+      workspacesCount: 0
+    };
   }
 
   public saveData(data: DBschema): void {
@@ -423,7 +577,28 @@ export class CipherSqliteAdapter {
     const catalogueItems = fetchAll('SELECT id, workspace_id as workspaceId, name, description, price, pricing_type as pricingType, discount_conditions as discountConditions, category, status, created_at as createdAt FROM catalogue_items;');
     const reviews = fetchAll('SELECT id, workspace_id as workspaceId, customer_name as customerName, rating, comment, created_at as createdAt FROM reviews;');
     const knowledgeEntries = fetchAll('SELECT id, workspace_id as workspaceId, topic, content, status, created_at as createdAt FROM knowledge_entries;');
-    const conversations = fetchAll('SELECT id, workspace_id as workspaceId, customer_identifier as customerIdentifier, status, created_at as createdAt FROM conversations;');
+    const backupData = loadDatabase();
+    const backupConvMap = new Map((backupData.conversations || []).map(c => [c.id, c]));
+
+    const rawConversations = fetchAll('SELECT id, workspace_id as workspaceId, customer_identifier as customerIdentifier, status, created_at as createdAt FROM conversations;');
+    const conversations = rawConversations.map((c: any) => {
+      const backup = backupConvMap.get(c.id) || {};
+      return {
+        id: c.id,
+        workspaceId: c.workspaceId || backup.workspaceId || 'ws-maple-and-moss',
+        customerName: backup.customerName || c.customerIdentifier || 'Customer',
+        customerEmail: backup.customerEmail || '',
+        customerPhone: backup.customerPhone || '',
+        status: c.status || backup.status || 'Active',
+        channel: backup.channel || 'Web Chat',
+        lastActive: backup.lastActive || 'Recently',
+        assignedOperator: backup.assignedOperator || 'Unassigned',
+        operatorNotes: backup.operatorNotes || '',
+        messages: Array.isArray(backup.messages) ? backup.messages : [],
+        createdAt: c.createdAt || backup.createdAt || new Date().toISOString()
+      };
+    });
+
     const enquiries = fetchAll('SELECT id, workspace_id as workspaceId, customer_name as customerName, customer_email as customerEmail, message, status, created_at as createdAt FROM enquiries;');
     const crmContacts = fetchAll('SELECT id, workspace_id as workspaceId, name, email, phone, status, created_at as createdAt FROM crm_contacts;');
     const proposals = fetchAll('SELECT id, workspace_id as workspaceId, client_name as clientName, title, amount, status, created_at as createdAt FROM proposals;');
@@ -448,8 +623,6 @@ export class CipherSqliteAdapter {
       ...a,
       details: JSON.parse(a.details || '{}')
     }));
-
-    const backupData = loadDatabase();
 
     return {
       ...backupData,

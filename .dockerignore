@@ -1,0 +1,27 @@
+node_modules
+dist
+.git
+.gitignore
+*.log
+
+# Databases, backups, and user records (must not be bundled into container images)
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+cipher.sqlite
+server/cipher_db.json
+*.bak
+*.tmp
+server/backups
+data-test-vol
+data-recovery-test
+data
+cipher-test*
+
+# Environment secrets
+.env*
+!.env.example
+
+# Development and testing
+tests
+coverage

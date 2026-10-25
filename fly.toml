@@ -1,0 +1,50 @@
+# CIPHER Production Deployment Configuration for Fly.io
+# Audited for Phase 3F.2: Single-Instance SQLite with Dedicated Persistent NVMe Volume
+
+app = "cipher-ecosystem"
+primary_region = "lhr"
+
+[build]
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
+  CIPHER_SQLITE_PATH = "/data/cipher.sqlite"
+  CIPHER_DB_PATH = "/data/cipher_db.json"
+  CIPHER_BACKUP_PATH = "/data/backups"
+  NODE_OPTIONS = "--max-old-space-size=384"
+
+# Dedicated Persistent Volume Mount (Ensures SQLite survives restarts and redeployments)
+# Run once before initial deploy: fly volumes create cipher_data --size 1 --region <region>
+[mounts]
+  source = "cipher_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+# Liveness Health Check (Verifies Node.js/Express process responsiveness)
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/api/health"
+
+# Readiness Health Check (Verifies SQLite connectivity and active multi-tenant workspace state)
+[[http_service.checks]]
+  grace_period = "15s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/api/ready"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  cpus = 1

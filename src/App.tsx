@@ -123,6 +123,8 @@ export default function App() {
   const [approvals, setApprovals] = useState<ApprovalRequest[]>(initialApprovals);
   const [integrations, setIntegrations] = useState<Integration[]>(initialIntegrations);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>(initialAuditEvents);
+  const [isDataLoading, setIsDataLoading] = useState<boolean>(false);
+  const [dataLoadError, setDataLoadError] = useState<string | null>(null);
 
   // Authenticated and Workspace-Scoped Fetch Wrapper
   const apiFetch = useCallback(async (url: string, init: RequestInit = {}) => {
@@ -137,6 +139,8 @@ export default function App() {
 
   // Load all data for the active workspace
   const loadWorkspaceData = useCallback(async (wsId?: string) => {
+    setIsDataLoading(true);
+    setDataLoadError(null);
     try {
       const targetWsId = wsId || currentWorkspace?.id;
       const headers: Record<string, string> = {};
@@ -160,28 +164,35 @@ export default function App() {
         integRes,
         audRes
       ] = await Promise.all([
-        fetch('/api/workspace', { headers }).then(r => r.json()).catch(() => null),
-        fetch('/api/catalogue', { headers }).then(r => r.json()).catch(() => []),
-        fetch('/api/reviews', { headers }).then(r => r.json()).catch(() => []),
-        fetch('/api/knowledge', { headers }).then(r => r.json()).catch(() => []),
-        fetch('/api/conversations', { headers }).then(r => r.json()).catch(() => []),
-        fetch('/api/enquiries', { headers }).then(r => r.json()).catch(() => []),
-        fetch('/api/crm', { headers }).then(r => r.json()).catch(() => []),
-        fetch('/api/proposals', { headers }).then(r => r.json()).catch(() => []),
-        fetch('/api/projects', { headers }).then(r => r.json()).catch(() => []),
-        fetch('/api/tasks', { headers }).then(r => r.json()).catch(() => []),
-        fetch('/api/workflows/executions', { headers }).then(r => r.json()).catch(() => []),
-        fetch('/api/assistant', { headers }).then(r => r.json()).catch(() => null),
-        fetch('/api/approvals', { headers }).then(r => r.json()).catch(() => []),
-        fetch('/api/integrations', { headers }).then(r => r.json()).catch(() => []),
-        fetch('/api/audit', { headers }).then(r => r.json()).catch(() => [])
+        fetch('/api/workspace', { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch('/api/catalogue', { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch('/api/reviews', { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch('/api/knowledge', { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch('/api/conversations', { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch('/api/enquiries', { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch('/api/crm', { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch('/api/proposals', { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch('/api/projects', { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch('/api/tasks', { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch('/api/workflows/executions', { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch('/api/assistant', { headers }).then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch('/api/approvals', { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch('/api/integrations', { headers }).then(r => r.ok ? r.json() : []).catch(() => []),
+        fetch('/api/audit', { headers }).then(r => r.ok ? r.json() : []).catch(() => [])
       ]);
 
       if (profileRes && profileRes.name) setProfile(profileRes);
       if (Array.isArray(catRes)) setCatalogue(catRes);
       if (Array.isArray(revRes)) setReviews(revRes);
       if (Array.isArray(kbRes)) setKnowledge(kbRes);
-      if (Array.isArray(convRes)) setConversations(convRes);
+      if (Array.isArray(convRes)) {
+        const normalized = convRes.map(c => ({
+          ...c,
+          customerName: c.customerName || 'Customer',
+          messages: Array.isArray(c.messages) ? c.messages : []
+        }));
+        setConversations(normalized);
+      }
       if (Array.isArray(enqRes)) setEnquiries(enqRes);
       if (Array.isArray(crmRes)) setCrmContacts(crmRes);
       if (Array.isArray(propRes)) setProposals(propRes);
@@ -192,8 +203,11 @@ export default function App() {
       if (Array.isArray(apprRes)) setApprovals(apprRes);
       if (Array.isArray(integRes)) setIntegrations(integRes);
       if (Array.isArray(audRes)) setAuditEvents(audRes);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error loading workspace data:', err);
+      setDataLoadError(err?.message || 'Unable to synchronize workspace operational data.');
+    } finally {
+      setIsDataLoading(false);
     }
   }, [sessionToken, currentWorkspace?.id]);
 
@@ -384,7 +398,7 @@ export default function App() {
     setReviews(prev => prev.map(r => r.id === id ? updated : r));
   };
 
-  const unreadHandoffCount = conversations.filter(c => c.status === 'Needs human').length;
+  const unreadHandoffCount = (Array.isArray(conversations) ? conversations : []).filter(c => c && c.status === 'Needs human').length;
 
   return (
     <div className="min-h-screen bg-[#F7F9F6] text-[#27332B] font-['Inter',sans-serif]">
@@ -523,6 +537,9 @@ export default function App() {
                       approvals={approvals}
                       assistant={assistant}
                       setActiveTab={setActiveTab}
+                      isLoading={isDataLoading}
+                      loadError={dataLoadError}
+                      onRetry={() => loadWorkspaceData()}
                     />
                   )}
                   {activeTab === 'conversations' && (

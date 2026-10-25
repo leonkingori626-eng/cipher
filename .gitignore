@@ -6,3 +6,20 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# SQLite and runtime databases
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+cipher.sqlite
+server/cipher_db.json
+cipher_db.json
+
+# Backups and pre-restore snapshots
+*.bak
+*.tmp
+server/backups/
+data-test-vol/
+data-recovery-test/
+data/
+cipher-test*

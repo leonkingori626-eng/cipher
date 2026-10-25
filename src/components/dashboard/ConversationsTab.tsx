@@ -109,7 +109,9 @@ export const ConversationsTab: React.FC<ConversationsTabProps> = ({
                     </span>
                   </div>
                   <p className="text-xs text-[#66716A] truncate mb-2">
-                    {conv.messages[conv.messages.length - 1]?.text || 'No messages yet'}
+                    {Array.isArray(conv.messages) && conv.messages.length > 0
+                      ? conv.messages[conv.messages.length - 1]?.text || 'No messages yet'
+                      : 'No messages yet'}
                   </p>
                   <div className="flex items-center justify-between text-[11px] text-[#66716A]">
                     <span>{conv.channel}</span>
@@ -152,7 +154,7 @@ export const ConversationsTab: React.FC<ConversationsTabProps> = ({
 
               {/* Messages Scroll Area */}
               <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-[#F7F9F6]">
-                {selectedConv.messages.map((msg) => {
+                {(Array.isArray(selectedConv.messages) ? selectedConv.messages : []).map((msg) => {
                   const isCust = msg.sender === 'customer';
                   const isOp = msg.sender === 'operator';
                   return (

@@ -21,6 +21,7 @@ import {
   listDatabaseBackups,
   restoreDatabaseBackup
 } from './server/db';
+import { sqliteAdapter } from './server/db/sqliteAdapter';
 
 dotenv.config();
 
@@ -39,6 +40,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+
+// Trust reverse proxy (e.g. Fly.io, Cloud Run, Render) for secure cookies and accurate client IP rate limiting
+app.set('trust proxy', 1);
 
 // Security Headers Middleware
 app.use((_req, res, next) => {
@@ -116,10 +120,25 @@ declare global {
   }
 }
 
-// Load persistent database state on startup
+// Initialize SQLite persistent adapter first to check for persistent volume data
+await sqliteAdapter.init().catch(err => {
+  console.warn('[SQLITE] Initialization deferred notice:', err.message);
+});
+
+// Load persistent database state with single authoritative source of truth:
+// If SQLite has committed data (e.g. from a persistent volume mount), SQLite is authoritative.
+// Otherwise, check if legacy JSON file exists and migrate/seed into SQLite.
 let db: DBschema;
 try {
-  db = loadDatabase();
+  if (sqliteAdapter.hasCommittedData()) {
+    console.info('[DATABASE] Loading authoritative multi-tenant dataset from persistent SQLite storage:', sqliteAdapter.getDatabaseFilePath());
+    db = sqliteAdapter.loadData();
+    saveDatabase(db); // mirror to JSON for local compatibility
+  } else {
+    console.info('[DATABASE] Initializing database from JSON / seed defaults...');
+    db = loadDatabase();
+    sqliteAdapter.saveData(db); // sync into SQLite
+  }
 } catch (initErr: any) {
   console.error('[FATAL] CIPHER Database initialization failed:', initErr.message);
   process.exit(1);
@@ -127,6 +146,11 @@ try {
 
 function persist(): void {
   saveDatabase(db);
+  try {
+    sqliteAdapter.saveData(db);
+  } catch (sqliteErr: any) {
+    console.warn('[SQLITE SYNC] Live sync notice:', sqliteErr.message);
+  }
 }
 
 function logAudit(
@@ -167,7 +191,8 @@ app.get('/api/ready', (_req, res) => {
       res.json({
         status: 'ready',
         database: 'connected',
-        storageArchitecture: 'single-instance file-backed json',
+        storageArchitecture: 'sqlite and durable atomic persistence',
+        sqlitePath: sqliteAdapter.getDatabaseFilePath(),
         rateLimiterArchitecture: 'in-memory sliding window (single-instance)',
         workspacesCount: db.workspaces.length,
         timestamp: new Date().toISOString()
@@ -311,12 +336,10 @@ function authMiddleware(options: { required: boolean }) {
       activeMembership = userMemberships.find(m => m.workspaceId === requestedWsId);
       targetWs = db.workspaces.find(w => w.id === requestedWsId);
       if (!activeMembership || !targetWs) {
-        if (options.required) {
-          return res.status(403).json({
-            error: 'Forbidden',
-            message: 'Access to the requested workspace is denied'
-          });
-        }
+        return res.status(403).json({
+          error: 'Forbidden',
+          message: 'Access to the requested workspace is denied'
+        });
       }
     } else {
       // Default to first membership or default workspace
@@ -743,6 +766,11 @@ app.get('/api/workspaces/:id/members', requireAuth, (req, res) => {
 // Invite / add member to workspace
 app.post('/api/workspaces/:id/members', requireAuth, requireRole(['Owner']), (req, res) => {
   const wsId = req.params.id;
+  const callerMembership = db.memberships.find(m => m.workspaceId === wsId && m.userId === req.user!.id);
+  if (!callerMembership || callerMembership.role !== 'Owner') {
+    return res.status(403).json({ error: 'Forbidden', message: 'Only an Owner of this workspace can manage members.' });
+  }
+
   const { email, role, name } = req.body;
 
   if (!email || !role) {
@@ -1010,7 +1038,7 @@ app.get('/api/workspace', optionalAuth, (req, res) => {
   res.json(ws.profile);
 });
 
-app.put('/api/workspace', optionalAuth, (req, res) => {
+app.put('/api/workspace', requireAuth, requireRole(['Owner', 'Operator']), (req, res) => {
   const ws = req.workspace || db.workspaces[0];
   ws.profile = { ...ws.profile, ...req.body, workspaceId: ws.id };
   ws.name = ws.profile.name || ws.name;
@@ -1169,7 +1197,7 @@ app.post('/api/website/draft/approve', optionalAuth, requireRole(['Owner', 'Oper
 });
 
 // Publish Website
-app.post('/api/website/publish', optionalAuth, requireRole(['Owner']), (req, res) => {
+app.post('/api/website/publish', requireAuth, requireRole(['Owner']), (req, res) => {
   const ws = req.workspace || db.workspaces[0];
   const draft = ws.profile.websiteDraft;
 
@@ -1195,7 +1223,7 @@ app.post('/api/website/publish', optionalAuth, requireRole(['Owner']), (req, res
 });
 
 // Unpublish / Deactivate Website
-app.post('/api/website/unpublish', optionalAuth, requireRole(['Owner']), (req, res) => {
+app.post('/api/website/unpublish', requireAuth, requireRole(['Owner']), (req, res) => {
   const ws = req.workspace || db.workspaces[0];
   ws.profile.published = false;
   if (ws.profile.websiteDraft) {
@@ -1221,7 +1249,7 @@ app.get('/api/catalogue', optionalAuth, (req, res) => {
   res.json(items);
 });
 
-app.post('/api/catalogue', optionalAuth, (req, res) => {
+app.post('/api/catalogue', requireAuth, requireRole(['Owner', 'Operator']), (req, res) => {
   const wsId = req.workspace?.id || DEFAULT_WORKSPACE_ID;
   const item = { id: `cat-${Date.now()}`, workspaceId: wsId, ...req.body };
   db.catalogueItems.push(item);
@@ -1230,7 +1258,7 @@ app.post('/api/catalogue', optionalAuth, (req, res) => {
   res.json(item);
 });
 
-app.put('/api/catalogue/:id', optionalAuth, (req, res) => {
+app.put('/api/catalogue/:id', requireAuth, requireRole(['Owner', 'Operator']), (req, res) => {
   const wsId = req.workspace?.id || DEFAULT_WORKSPACE_ID;
   const index = db.catalogueItems.findIndex(i => i.id === req.params.id && (i.workspaceId || DEFAULT_WORKSPACE_ID) === wsId);
   if (index === -1) return res.status(404).json({ error: 'Catalogue item not found' });
@@ -1240,7 +1268,7 @@ app.put('/api/catalogue/:id', optionalAuth, (req, res) => {
   res.json(db.catalogueItems[index]);
 });
 
-app.delete('/api/catalogue/:id', optionalAuth, (req, res) => {
+app.delete('/api/catalogue/:id', requireAuth, requireRole(['Owner', 'Operator']), (req, res) => {
   const wsId = req.workspace?.id || DEFAULT_WORKSPACE_ID;
   const initialLen = db.catalogueItems.length;
   db.catalogueItems = db.catalogueItems.filter(i => !(i.id === req.params.id && (i.workspaceId || DEFAULT_WORKSPACE_ID) === wsId));
@@ -1284,7 +1312,7 @@ app.get('/api/knowledge', optionalAuth, (req, res) => {
   res.json(entries);
 });
 
-app.post('/api/knowledge', optionalAuth, (req, res) => {
+app.post('/api/knowledge', requireAuth, requireRole(['Owner', 'Operator']), (req, res) => {
   const wsId = req.workspace?.id || DEFAULT_WORKSPACE_ID;
   const newEntry = {
     id: `kb-${Date.now()}`,
@@ -1298,7 +1326,7 @@ app.post('/api/knowledge', optionalAuth, (req, res) => {
   res.json(newEntry);
 });
 
-app.put('/api/knowledge/:id', optionalAuth, (req, res) => {
+app.put('/api/knowledge/:id', requireAuth, requireRole(['Owner', 'Operator']), (req, res) => {
   const wsId = req.workspace?.id || DEFAULT_WORKSPACE_ID;
   const index = db.knowledgeEntries.findIndex(k => k.id === req.params.id && (k.workspaceId || DEFAULT_WORKSPACE_ID) === wsId);
   if (index === -1) return res.status(404).json({ error: 'Not found' });
@@ -1307,7 +1335,7 @@ app.put('/api/knowledge/:id', optionalAuth, (req, res) => {
   res.json(db.knowledgeEntries[index]);
 });
 
-app.delete('/api/knowledge/:id', optionalAuth, (req, res) => {
+app.delete('/api/knowledge/:id', requireAuth, requireRole(['Owner', 'Operator']), (req, res) => {
   const wsId = req.workspace?.id || DEFAULT_WORKSPACE_ID;
   db.knowledgeEntries = db.knowledgeEntries.filter(k => !(k.id === req.params.id && (k.workspaceId || DEFAULT_WORKSPACE_ID) === wsId));
   persist();
@@ -1317,7 +1345,12 @@ app.delete('/api/knowledge/:id', optionalAuth, (req, res) => {
 // Conversations
 app.get('/api/conversations', optionalAuth, (req, res) => {
   const wsId = req.workspace?.id || DEFAULT_WORKSPACE_ID;
-  const convs = db.conversations.filter(c => (c.workspaceId || DEFAULT_WORKSPACE_ID) === wsId);
+  const convs = (db.conversations || [])
+    .filter(c => (c.workspaceId || DEFAULT_WORKSPACE_ID) === wsId)
+    .map(c => ({
+      ...c,
+      messages: Array.isArray(c.messages) ? c.messages : []
+    }));
   res.json(convs);
 });
 
@@ -1362,6 +1395,9 @@ app.post('/api/conversations/:id/messages', optionalAuth, (req, res) => {
     isAiGenerated: req.body.isAiGenerated,
     needsHandoff: req.body.needsHandoff
   };
+  if (!Array.isArray(conv.messages)) {
+    conv.messages = [];
+  }
   conv.messages.push(newMessage);
   conv.lastActive = 'Just now';
   if (req.body.needsHandoff) conv.status = 'Needs human';
@@ -1653,6 +1689,14 @@ Answer customer questions using only this approved information. Be warm and prof
     console.error('AI Error:', err);
     res.json({ reply: 'Thank you for your message. Our team has been notified to assist you.', isAiGenerated: true, needsHandoff: true });
   }
+});
+
+// Explicit API 404 handler (prevents returning SPA HTML for missing API endpoints)
+app.all('/api/*', (req, res) => {
+  res.status(404).json({
+    error: 'Not Found',
+    message: `API endpoint ${req.method} ${req.path} does not exist.`
+  });
 });
 
 // Vite middleware / static serve

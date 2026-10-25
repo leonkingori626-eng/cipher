@@ -26,7 +26,17 @@ const __dirname = path.dirname(__filename);
 // Resolved absolute database path (customizable via CIPHER_DB_PATH)
 export function getDatabasePath(customPath?: string): string {
   if (customPath) return path.resolve(customPath);
-  if (process.env.CIPHER_DB_PATH) return path.resolve(process.env.CIPHER_DB_PATH);
+  if (process.env.CIPHER_DB_PATH) {
+    const resolved = path.resolve(process.env.CIPHER_DB_PATH);
+    // Prevent accidental collision where a SQLite database path is passed to the JSON database
+    if (resolved.endsWith('.sqlite') || resolved.endsWith('.db')) {
+      return `${resolved}.json`;
+    }
+    if (process.env.CIPHER_SQLITE_PATH && resolved === path.resolve(process.env.CIPHER_SQLITE_PATH)) {
+      return `${resolved}.json`;
+    }
+    return resolved;
+  }
   return path.join(__dirname, 'cipher_db.json');
 }
 
